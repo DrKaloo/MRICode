@@ -14,7 +14,7 @@ from dataset import BrainMRIDataset, RandomFlip3D
 def train_with_config(config, config_name):
     """Train model with specific hyperparameter configuration"""
 
-    # Setup
+    #Setup
     device = torch.device('cpu')
     print(f"\n{'='*60}")
     print(f"Training Configuration: {config_name}")
@@ -25,7 +25,7 @@ def train_with_config(config, config_name):
     print(f"Class Weights: {config['class_weights']}")
     print(f"{'='*60}\n")
 
-    # Data
+    #Data
     resolution = 128
     task = "binary"
     split_folder = f"res_{resolution}_{task}"
@@ -39,14 +39,14 @@ def train_with_config(config, config_name):
     train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, num_workers=0)
 
-    # Model with specified dropout
+    #Model with specified dropout
     model = resnet3d_34(num_classes=2, dropout=config['dropout']).to(device)
 
-    # Loss with specified class weights
+    #Loss with specified class weights
     class_weights = torch.tensor(config['class_weights'], device=device)
     criterion = nn.CrossEntropyLoss(weight=class_weights)
 
-    # Optimizer with specified lr and weight_decay
+    #Optimizer with specified lr and weight_decay
     optimizer = optim.Adam(model.parameters(),
                           lr=config['lr'],
                           weight_decay=config['weight_decay'])
@@ -56,9 +56,9 @@ def train_with_config(config, config_name):
     best_val_acc = 0.0
     history = []
 
-    # Train for fewer epochs (50 instead of 100) to save time
+    #Training for fewer epochs (50 instead of 100) to save time while learning
     for epoch in range(50):
-        # Training
+        #Training
         model.train()
         train_loss = 0.0
         train_correct = 0
@@ -81,7 +81,7 @@ def train_with_config(config, config_name):
         train_loss /= len(train_loader)
         train_acc = 100. * train_correct / train_total
 
-        # Validation
+        #Validation
         model.eval()
         val_loss = 0.0
         val_correct = 0
@@ -103,14 +103,14 @@ def train_with_config(config, config_name):
 
         scheduler.step(val_loss)
 
-        # Save best
+        #Save best
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             os.makedirs('results/hyperparam_search', exist_ok=True)
             torch.save(model.state_dict(),
                       f'results/hyperparam_search/{config_name}_best.pth')
 
-        # Record history
+        #Record history
         history.append({
             'epoch': epoch + 1,
             'train_loss': train_loss,
@@ -133,7 +133,7 @@ def train_with_config(config, config_name):
 
 
 def main():
-    # Define configurations to test
+    #Define configurations to test
     configs = [
         {
             'name': 'baseline',
@@ -178,7 +178,7 @@ def main():
         result = train_with_config(config, config['name'])
         results.append(result)
 
-        # Save intermediate results
+        #Save intermediate results
         results_df = pd.DataFrame([{
             'config_name': r['config_name'],
             'lr': r['config']['lr'],
@@ -194,7 +194,7 @@ def main():
         print(results_df.to_string(index=False))
         print("="*60 + "\n")
 
-    # Final summary
+    #Final summary
     print("\n" + "="*60)
     print("HYPERPARAMETER SEARCH COMPLETE")
     print("="*60)

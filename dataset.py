@@ -23,7 +23,7 @@ class BrainMRIDataset(Dataset):
         data = img.get_fdata() # type: ignore
         data = torch.FloatTensor(data).unsqueeze(0)
 
-        # Enhanced augmentation - prevents overfitting
+        #Enhanced augmentation to prevent overfitting
         if self.augment:
             data = self.augment_3d(data)
 
@@ -33,29 +33,29 @@ class BrainMRIDataset(Dataset):
         return data, label
 
     def augment_3d(self, x):
-        # Random flip (left-right)
+        #Random flip (left-right)
         if torch.rand(1) > 0.5:
             x = torch.flip(x, dims=[1])
 
-        # Random rotation (small angles)
+        #Random rotation (small angles)
         if torch.rand(1) > 0.5:
             angle = (torch.rand(1) - 0.5) * 20  # ±10 degrees
             x = self.rotate_3d(x, angle)
 
-        # Random noise
+        #Random noise
         if torch.rand(1) > 0.5:
             noise = torch.randn_like(x) * 0.02
             x = x + noise
 
-        # Random intensity shift
+        #Random intensity shift
         if torch.rand(1) > 0.5:
             shift = (torch.rand(1) - 0.5) * 0.2
             x = x + shift
 
         return x
 
-#    def rotate_3d(self, x, angle):
-        """Simple rotation around z-axis"""
+    #def rotate_3d(self, x, angle):
+        #Simple rotation around z-axis
         # Simplified just returning x for now
         # A good rotation requires more complex transforms
         return x

@@ -16,12 +16,12 @@ def evaluate():
     device = torch.device('cpu')
     print(f"Using device: {device}")
 
-    # Load test data
+    #Load test data
     test_csv = r"C:\Users\todor\PycharmProjects\PyCharm-Work\Msc-AD\data\splits\res_128_binary\test.csv"
     test_dataset = BrainMRIDataset(test_csv)
     test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False)
 
-    # Loading lower_lr model (our best generalizing model)
+    #Loading lower_lr model (best model)
     model = resnet3d_34(num_classes=2, dropout=0.3).to(device)
     model.load_state_dict(torch.load('results/hyperparam_search/lower_lr_best.pth'))
     model.eval()
@@ -42,29 +42,29 @@ def evaluate():
             all_labels.extend(labels.numpy())
             all_probs.extend(probs[:, 1].cpu().numpy())
 
-    # Convert to numpy
+    #Convert to numpy
     all_preds = np.array(all_preds)
     all_labels = np.array(all_labels)
     all_probs = np.array(all_probs)
 
-    # Save predictions for demographic analysis
+    #Save predictions for demographic analysis
     results_df = pd.read_csv(test_csv)
     results_df['predicted'] = all_preds
     results_df['predicted_prob'] = all_probs
     results_df.to_csv('results/test_predictions_lower_lr.csv', index=False)
     print("✓ Predictions saved to: results/test_predictions_lower_lr.csv\n")
 
-    # Results
+    #Results
     print("="*60)
     print("LOWER_LR MODEL EVALUATION - Binary Classification")
     print("Task: CN (Cognitively Normal) vs VeryMild Impairment")
     print("="*60)
 
-    # Classification report
+    #Classification report
     print("\nClassification Report:")
     print(classification_report(all_labels, all_preds, target_names=['CN', 'VeryMild'], digits=3))
 
-    # Confusion matrix
+    #Confusion matrix
     cm = confusion_matrix(all_labels, all_preds)
     print("\nConfusion Matrix:")
     print("              Predicted")
@@ -72,7 +72,7 @@ def evaluate():
     print(f"Actual CN     {cm[0,0]:3d}  {cm[0,1]:3d}")
     print(f"       VeryMild {cm[1,0]:3d}  {cm[1,1]:3d}")
 
-    # Calculate metrics
+    #Calculate metrics
     accuracy = (all_preds == all_labels).sum() / len(all_labels)
 
     if cm.shape == (2, 2):
@@ -96,7 +96,7 @@ def evaluate():
         except:
             print("  AUC-ROC:     Could not compute")
 
-    # Save confusion matrix plot
+    #Save confusion matrix plot
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
                 xticklabels=['CN', 'VeryMild'],
@@ -108,7 +108,7 @@ def evaluate():
     plt.savefig('results/confusion_matrix_test_lower_lr.png', dpi=150)
     print("\n✓ Confusion matrix saved to: results/confusion_matrix_test_lower_lr.png")
 
-    # ROC curve
+    #ROC curve
     if len(np.unique(all_labels)) == 2:
         try:
             fpr, tpr, thresholds = roc_curve(all_labels, all_probs)

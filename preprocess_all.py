@@ -11,7 +11,7 @@ BASE_FOLDER = r"C:\Users\todor\PycharmProjects\PyCharm-Work\Msc-AD\data\raw"
 OUTPUT_BASE = r"C:\Users\todor\PycharmProjects\PyCharm-Work\Msc-AD\data"
 
 #demographics
-# noinspection PyTypeChecker
+#noinspection PyTypeChecker
 AGE_MIN = None
 AGE_MAX = None
 SEX_FILTER = None  #'M', 'F', or None
@@ -28,32 +28,32 @@ def preprocess_scan_proper(input_path, output_path, target_shape):
     if data.ndim == 4:
         data = data.squeeze()
 
-    # Better brain mask using percentile-based threshold
+    #Better brain mask using percentile-based threshold
     threshold = np.percentile(data[data > 0], 10)
     brain_mask = data > threshold
 
-    # Morphological cleanup
+    #Morphological cleanup
     brain_mask = binary_fill_holes(brain_mask)
     brain_mask = binary_erosion(brain_mask, iterations=1)
     brain_mask = binary_dilation(brain_mask, iterations=2)
 
-    #Intensity normalization
+    #Intensity normalisation
     brain_voxels = data[brain_mask]
     if len(brain_voxels) < 100:
         return None
 
-    # Use percentile normalization (more robust than mean/std)
+    #Use percentile normalisation (more robust than mean/std)
     p01, p99 = np.percentile(brain_voxels, [1, 99])
     data_clipped = np.clip(data, p01, p99)
 
-# noinspection DuplicatedCode
-    # Z-score normalization
+#noinspection DuplicatedCode
+    #Z-score normalisation
     mean_val = brain_voxels.mean()
     std_val = brain_voxels.std()
     data_normalized = (data_clipped - mean_val) / (std_val + 1e-8)
     data_normalized[~brain_mask] = 0
 
-    # Crop image to brain
+    #Crop image to brain
     # noinspection DuplicatedCode
     coords = np.array(np.where(brain_mask))
     x_min, y_min, z_min = coords.min(axis=1)
@@ -69,21 +69,21 @@ def preprocess_scan_proper(input_path, output_path, target_shape):
 
     data_cropped = data_normalized[x_min:x_max, y_min:y_max, z_min:z_max]
 
-    # High quality resampling
+    #High quality resampling
     zoom_factors = [target_shape[i] / data_cropped.shape[i] for i in range(3)]
-    data_resized = zoom(data_cropped, zoom_factors, order=3)  # Cubic interpolation
+    data_resized = zoom(data_cropped, zoom_factors, order=3)  #Cubic interpolation
 
-    # Create proper affine for resized image
-    # Adjust affine to account for cropping and resampling
+    #Create proper affine for resised image
+    #Adjust affine to account for cropping and resampling
     crop_translation = np.array([x_min, y_min, z_min])
     new_affine = original_affine.copy()
     new_affine[:3, 3] += original_affine[:3, :3] @ crop_translation
 
-    # Adjust for resampling
+    #Adjust for resampling
     zoom_matrix = np.diag([1/zoom_factors[0], 1/zoom_factors[1], 1/zoom_factors[2], 1])
     new_affine = new_affine @ zoom_matrix
 
-    # Save with proper affine
+    #Save with proper affine
     output_img = nib.Nifti1Image(data_resized, affine=new_affine)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     nib.save(output_img, output_path)
@@ -97,7 +97,7 @@ def find_processed_scans():
 
     for patient_folder in patient_folders:
         #better quality first once processed
-        # noinspection SpellCheckingInspection
+        #noinspection SpellCheckingInspection
         processed_folder = os.path.join(patient_folder, "PROCESSED", "MPRAGE", "T88_111")
         if os.path.exists(processed_folder):
             scans = glob(os.path.join(processed_folder, "*.hdr"))
@@ -145,12 +145,12 @@ def process_all_resolutions():
                 except (IOError, ValueError, RuntimeError) as e:
                     print(f"\nError on {patient_id}: {e}")
 
-        print(f"✓ Completed {res}³: {success}/{len(scan_files)} successful")
+        print(f"Completed {res}³: {success}/{len(scan_files)} successful")
 
 
 def extract_labels_with_demographics():
     """
-    Extract labels AND demographics, apply filters
+    Extract labels and demographics, apply filters
     """
     patient_pattern = os.path.join(BASE_FOLDER, "OAS1_*_MR*")
     patient_folders = glob(patient_pattern)
@@ -171,7 +171,7 @@ def extract_labels_with_demographics():
             content = f.read()
 
         #metadata
-        # noinspection SpellCheckingInspection
+        #noinspection SpellCheckingInspection
         cdr = age = sex = educ = mmse = None
 
         for line in content.split('\n'):
@@ -196,7 +196,7 @@ def extract_labels_with_demographics():
                     educ = int(line.split('EDUC:')[1].strip())
                 except (ValueError, IndexError):
                     pass
-            # noinspection SpellCheckingInspection
+            #noinspection SpellCheckingInspection
             elif 'MMSE:' in line:
                 try:
                     # noinspection SpellCheckingInspection
@@ -262,11 +262,11 @@ def extract_labels_with_demographics():
     df.to_csv(os.path.join(OUTPUT_BASE, 'metadata.csv'), index=False)
 
     print(f"\n Saved {len(df)} scan entries")
-    print(f"  Unique patients: {df['patient_id'].nunique()}")
+    print(f"Unique patients: {df['patient_id'].nunique()}")
     print(f"\nFilters applied:")
-    print(f"  Age range: {AGE_MIN or 'None'} - {AGE_MAX or 'None'}")
-    print(f"  Sex: {SEX_FILTER or 'Both'}")
-    print(f"  Skipped: {skipped_age} (age), {skipped_sex} (sex), {skipped_cdr} (no CDR)")
+    print(f"Age range: {AGE_MIN or 'None'} - {AGE_MAX or 'None'}")
+    print(f"Sex: {SEX_FILTER or 'Both'}")
+    print(f"Skipped: {skipped_age} (age), {skipped_sex} (sex), {skipped_cdr} (no CDR)")
 
     print(f"\nClass distribution (patients):")
     print(df.groupby('diagnosis')['patient_id'].nunique())
@@ -275,7 +275,7 @@ def extract_labels_with_demographics():
     print(f"\nSex distribution:")
     print(pd.crosstab(df['diagnosis'], df['sex']))
 
-# noinspection DuplicatedCode
+#noinspection DuplicatedCode
 def create_binary_split(df_binary, splits_base, res):
     """Helper to create binary classification splits"""
     try:
@@ -290,12 +290,12 @@ def create_binary_split(df_binary, splits_base, res):
         val_b.to_csv(os.path.join(split_dir, 'val.csv'), index=False)
         test_b.to_csv(os.path.join(split_dir, 'test.csv'), index=False)
 
-        print(f"\n  Binary (CN vs VeryMild):")
-        print(f"    Train: {len(train_b)}, Val: {len(val_b)}, Test: {len(test_b)}")
+        print(f"\nBinary (CN vs VeryMild):")
+        print(f"Train: {len(train_b)}, Val: {len(val_b)}, Test: {len(test_b)}")
     except ValueError as e:
-        print(f"  Binary split failed: {e}")
+        print(f"Binary split failed: {e}")
 
-# noinspection DuplicatedCode
+#noinspection DuplicatedCode
 def create_3class_split(df_res, splits_base, res):
     """Helper to create 3-class splits"""
     try:
@@ -323,19 +323,19 @@ def create_splits():
     for res in [96, 128]:
         df_res = df[df['resolution'] == res]
 
-        # Keep 1 scan per patient
+        #Keep 1 scan per patient
         df_res = df_res.sort_values('scan_filename').groupby('patient_id').first().reset_index()
 
         print(f"\nResolution {res}³:")
         print(f"  Total patients: {len(df_res)}")
         print(f"  Class balance: {df_res['diagnosis'].value_counts().to_dict()}")
 
-        # Binary split: CN vs VeryMild (for early detection)
+        #Binary split: CN vs VeryMild (for early detection)
         df_binary = df_res[df_res['label'].isin([0, 1])].copy()
         df_binary['binary_label'] = df_binary['label']  # 0=CN, 1=VeryMild
         create_binary_split(df_binary, splits_base, res)
 
-        # 3-class split: CN vs VeryMild vs Dementia
+        #3-class split: CN vs VeryMild vs Dementia
         create_3class_split(df_res, splits_base, res)
 
 

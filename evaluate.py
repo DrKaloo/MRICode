@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 import sys
 import os
@@ -22,7 +21,7 @@ def evaluate():
     test_dataset = BrainMRIDataset(test_csv)
     test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False)
 
-    #Loading of trained model - ResNet-34
+    #Loading of trained model = ResNet-34
     model = resnet3d_34(num_classes=2).to(device)
     model.load_state_dict(torch.load('results/best_model_binary_128.pth'))
     model.eval()
@@ -69,10 +68,10 @@ def evaluate():
     #Confusion matrix
     cm = confusion_matrix(all_labels, all_preds)
     print("\nConfusion Matrix:")
-    print("              Predicted")
-    print("              CN  VeryMild")
-    print(f"Actual CN     {cm[0,0]:3d}  {cm[0,1]:3d}")
-    print(f"       VeryMild {cm[1,0]:3d}  {cm[1,1]:3d}")
+    print("Predicted")
+    print("CN  VeryMild")
+    print(f"Actual CN {cm[0,0]:3d}  {cm[0,1]:3d}")
+    print(f"VeryMild {cm[1,0]:3d}  {cm[1,1]:3d}")
 
     #Calculate metrics
     accuracy = (all_preds == all_labels).sum() / len(all_labels)
@@ -91,12 +90,12 @@ def evaluate():
         print(f"  PPV:         {ppv*100:.2f}% (precision for VeryMild)")
         print(f"  NPV:         {npv*100:.2f}% (precision for CN)")
 
-        # AUC-ROC
+        #AUC-ROC
         try:
             auc = roc_auc_score(all_labels, all_probs)
-            print(f"  AUC-ROC:     {auc:.3f}")
+            print(f"  AUC-ROC: {auc:.3f}")
         except:
-            print("  AUC-ROC:     Could not compute (need probabilities)")
+            print("  AUC-ROC: Could not compute (need probabilities)")
 
     #Save confusion matrix plot
     plt.figure(figsize=(8, 6))

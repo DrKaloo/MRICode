@@ -11,11 +11,11 @@ import os
 os.makedirs('results', exist_ok=True)
 
 print("="*60)
-print("CALIBRATION ANALYSIS")
+print("Calibration Analysis")
 print("Testing model confidence reliability")
 print("="*60)
 
-# Load test data with predictions
+#Load test data with predictions
 print("\n1. Loading data...")
 test_csv = r"C:\Users\todor\PycharmProjects\PyCharm-Work\Msc-AD\data\splits\res_128_binary\test.csv"
 test_df = pd.read_csv(test_csv)
@@ -24,12 +24,12 @@ try:
     pred_df = pd.read_csv('results/test_predictions_lower_lr.csv')
     test_df['predicted'] = pred_df['predicted'].values
     test_df['predicted_prob'] = pred_df['predicted_prob'].values
-    print(f"   Loaded {len(test_df)} test cases")
+    print(f"Loaded {len(test_df)} test cases")
 except:
-    print("  No predictions found. Run evaluate.py first.")
+    print(" No predictions found. Run evaluate.py first.")
     exit()
 
-# Create age groups
+#Create age groups
 test_df['age_group'] = pd.cut(test_df['age'],
                               bins=[0, 70, 80, 100],
                               labels=['<70', '70-80', '>80'])
@@ -38,7 +38,7 @@ print("\n2. Analyzing calibration by age group...")
 
 fig, axes = plt.subplots(2, 2, figsize=(14, 12))
 
-# ========== PLOT 1: Overall Calibration ==========
+#Plot 1: Overall Calibration
 ax = axes[0, 0]
 try:
     prob_true, prob_pred = calibration_curve(
@@ -59,7 +59,7 @@ try:
 except Exception as e:
     ax.text(0.5, 0.5, f'Error: {str(e)}', ha='center', va='center')
 
-# ========== PLOT 2: Calibration by Age Group ==========
+#Plot 2: Calibration by Age Group
 ax = axes[0, 1]
 age_groups = ['<70', '70-80', '>80']
 colors = ['green', 'orange', 'red']
@@ -89,7 +89,7 @@ ax.grid(alpha=0.3)
 ax.set_xlim([0, 1])
 ax.set_ylim([0, 1])
 
-# ========== PLOT 3: Confidence Distribution ==========
+#Plot 3: Confidence Distribution
 ax = axes[1, 0]
 
 for age_group, color in zip(age_groups, colors):
@@ -108,7 +108,7 @@ ax.set_title('Confidence Distribution by Age', fontsize=13, fontweight='bold')
 ax.legend(fontsize=10)
 ax.grid(alpha=0.3, axis='y')
 
-# ========== PLOT 4: Statistics Table ==========
+#Plot 4: Statistics Table
 ax = axes[1, 1]
 ax.axis('off')
 
@@ -148,8 +148,8 @@ ax.text(0.1, 0.9, stats_text, transform=ax.transAxes,
 
 plt.tight_layout()
 plt.savefig('results/calibration_analysis_lower_lr.png', dpi=150, bbox_inches='tight')
-print(f"\n   📁 Saved: results/calibration_analysis_lower_lr.png")
+print(f"\nSaved: results/calibration_analysis_lower_lr.png")
 
 print("\n" + "="*60)
-print("CALIBRATION ANALYSIS COMPLETE")
+print("Calibration Analysis Complete")
 print("="*60)

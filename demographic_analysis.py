@@ -7,11 +7,11 @@ print("="*60)
 print("LOADING DATA")
 print("="*60)
 
-# Load test data
+#Load test data
 test_csv = r"C:\Users\todor\PycharmProjects\PyCharm-Work\Msc-AD\data\splits\res_128_binary\test.csv"
 test_df = pd.read_csv(test_csv)
 
-# Load predictions (you need to run evaluate.py first to generate this)
+#Load predictions
 try:
     predictions_df = pd.read_csv('results/test_predictions_lower_lr.csv')
     test_df['predicted'] = predictions_df['predicted'].values
@@ -21,23 +21,23 @@ except FileNotFoundError:
     print("No predictions found. Run evaluate.py first with updated code.")
     has_predictions = False
 
-# Check and standardize sex column
+#Check and standardise sex column
 print("\n Sex column values:")
 print(test_df['sex'].value_counts())
 
-# Standardize sex column
+#Standardise sex column
 if test_df['sex'].dtype == 'object':
-    # If sex is 'Male'/'Female' strings
+    #If sex is 'Male'/'Female' strings
     test_df['sex'] = test_df['sex'].map({'Male': 'M', 'Female': 'F'})
 else:
-    # If sex is already 'M'/'F', keep as is
+    #If sex is already 'M'/'F', keep as is
     pass
 
 print("\n" + "="*60)
 print("DEMOGRAPHIC PERFORMANCE ANALYSIS")
 print("="*60)
 
-# Age groups
+#Age groups
 test_df['age_group'] = pd.cut(test_df['age'],
                               bins=[0, 70, 80, 100],
                               labels=['<70', '70-80', '>80'])
@@ -50,7 +50,7 @@ if has_predictions:
             acc = accuracy_score(subset['label'], subset['predicted'])
             cm = confusion_matrix(subset['label'], subset['predicted'])
 
-            # Calculate sensitivity/specificity if we have both classes
+            #Calculate sensitivity/specificity if there are both classes
             if cm.shape == (2, 2):
                 tn, fp, fn, tp = cm.ravel()
                 sens = tp / (tp + fn) if (tp + fn) > 0 else 0
@@ -81,12 +81,12 @@ if has_predictions:
             acc = accuracy_score(subset['label'], subset['predicted'])
             print(f"   Level {int(educ)}: {acc*100:5.1f}% acc (n={len(subset):2d})")
 
-    # ERROR ANALYSIS
+    #Error Analysis
     print("\n" + "="*60)
     print("ERROR ANALYSIS")
     print("="*60)
 
-    # Separate correct vs incorrect predictions
+    #Separate correct vs incorrect predictions
     correct_mask = test_df['label'] == test_df['predicted']
     incorrect_mask = ~correct_mask
 
@@ -96,7 +96,7 @@ if has_predictions:
     print(f"\nCorrectly classified: {len(correct_df)} ({len(correct_df)/len(test_df)*100:.1f}%)")
     print(f"Incorrectly classified: {len(incorrect_df)} ({len(incorrect_df)/len(test_df)*100:.1f}%)")
 
-    # Compare characteristics
+    #Compare characteristics
     print("\n📊 Age comparison:")
     print(f"   Correct predictions:   {correct_df['age'].mean():.1f} ± {correct_df['age'].std():.1f} years")
     print(f"   Incorrect predictions: {incorrect_df['age'].mean():.1f} ± {incorrect_df['age'].std():.1f} years")
@@ -118,20 +118,20 @@ if has_predictions:
     print("   Incorrect predictions:")
     print(incorrect_df['diagnosis'].value_counts())
 
-    # Confusion matrix breakdown
+    #Confusion matrix breakdown
     print("\n" + "="*60)
     print("DETAILED CONFUSION MATRIX ANALYSIS")
     print("="*60)
 
     cm = confusion_matrix(test_df['label'], test_df['predicted'])
 
-    # True Negatives (CN predicted as CN)
+    #True Negatives (CN predicted as CN)
     tn_mask = (test_df['label'] == 0) & (test_df['predicted'] == 0)
-    # False Positives (CN predicted as VeryMild)
+    #False Positives (CN predicted as VeryMild)
     fp_mask = (test_df['label'] == 0) & (test_df['predicted'] == 1)
-    # False Negatives (VeryMild predicted as CN)
+    #False Negatives (VeryMild predicted as CN)
     fn_mask = (test_df['label'] == 1) & (test_df['predicted'] == 0)
-    # True Positives (VeryMild predicted as VeryMild)
+    #True Positives (VeryMild predicted as VeryMild)
     tp_mask = (test_df['label'] == 1) & (test_df['predicted'] == 1)
 
     print(f"\nTrue Negatives (CN → CN): {tn_mask.sum()}")
@@ -154,10 +154,10 @@ if has_predictions:
     if tp_mask.sum() > 0:
         print(f"   Age: {test_df[tp_mask]['age'].mean():.1f} ± {test_df[tp_mask]['age'].std():.1f}")
 
-    # Create visualization
+    #Create visualisation
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
-    # Age distribution by prediction correctness
+    #Age distribution by prediction correctness
     axes[0, 0].hist([correct_df['age'], incorrect_df['age']],
                      label=['Correct', 'Incorrect'], bins=15, alpha=0.7)
     axes[0, 0].set_xlabel('Age (years)')
@@ -165,7 +165,7 @@ if has_predictions:
     axes[0, 0].set_title('Age Distribution: Correct vs Incorrect')
     axes[0, 0].legend()
 
-    # Performance by age group
+    #Performance by age group
     age_results = []
     for group in ['<70', '70-80', '>80']:
         subset = test_df[test_df['age_group'] == group]
@@ -179,7 +179,7 @@ if has_predictions:
     axes[0, 1].set_title('Performance by Age Group')
     axes[0, 1].set_ylim([0, 1])
 
-    # Performance by sex
+    #Performance by sex
     sex_results = []
     for sex in test_df['sex'].unique():
         subset = test_df[test_df['sex'] == sex]
@@ -193,7 +193,7 @@ if has_predictions:
     axes[1, 0].set_title('Performance by Sex')
     axes[1, 0].set_ylim([0, 1])
 
-    # Confusion matrix by group
+    #Confusion matrix by group
     group_cm = []
     for group in ['<70', '70-80', '>80']:
         subset = test_df[test_df['age_group'] == group]

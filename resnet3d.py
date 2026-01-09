@@ -54,7 +54,7 @@ class ResNet3D(nn.Module):
         self.conv1 = nn.Conv3d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm3d(64)
         self.relu = nn.ReLU(inplace=True)
-        # noinspection SpellCheckingInspection
+        #noinspection SpellCheckingInspection
         self.maxpool = nn.MaxPool3d(kernel_size=3, stride=2, padding=1)
 
         self.layer1 = self._make_layer(64, 64, block_config[0], stride=1, dropout=dropout)
@@ -67,7 +67,7 @@ class ResNet3D(nn.Module):
         self.fc = nn.Linear(512, num_classes)
 
         self._initialize_weights()
-    # noinspection PyMethodMayBeStatic
+    #noinspection PyMethodMayBeStatic
     def _make_layer(self, in_channels, out_channels, blocks, stride, dropout):
         layers = [BasicBlock3D(in_channels, out_channels, stride, dropout)]
 
@@ -75,7 +75,7 @@ class ResNet3D(nn.Module):
             layers.append(BasicBlock3D(out_channels, out_channels, stride=1, dropout=dropout))
 
         return nn.Sequential(*layers)
-# noinspection DuplicatedCode
+    #noinspection DuplicatedCode
     def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv3d):

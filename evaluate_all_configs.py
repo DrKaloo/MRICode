@@ -14,12 +14,12 @@ def evaluate_config(config_name, dropout):
 
     device = torch.device('cpu')
 
-    # Load test data
+    #Load test data
     test_csv = r"C:\Users\todor\PycharmProjects\PyCharm-Work\Msc-AD\data\splits\res_128_binary\test.csv"
     test_dataset = BrainMRIDataset(test_csv)
     test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False)
 
-    # Load model
+    #Load model
     model = resnet3d_34(num_classes=2, dropout=dropout).to(device)
     model.load_state_dict(torch.load(f'results/hyperparam_search/{config_name}_best.pth'))
     model.eval()
@@ -36,14 +36,14 @@ def evaluate_config(config_name, dropout):
             all_preds.extend(predicted.cpu().numpy())
             all_labels.extend(labels.numpy())
 
-    # Calculate metrics
+    #Calculate metrics
     test_df = pd.read_csv(test_csv)
     test_df['predicted'] = all_preds
 
-    # Overall accuracy
+    #Overall accuracy
     overall_acc = accuracy_score(all_labels, all_preds)
 
-    # Age-stratified accuracy
+    #Age-stratified accuracy
     test_df['age_group'] = pd.cut(test_df['age'],
                                   bins=[0, 70, 80, 100],
                                   labels=['<70', '70-80', '>80'])
@@ -63,7 +63,7 @@ def evaluate_config(config_name, dropout):
 
             age_results[group] = {'acc': acc, 'sens': sens, 'n': len(subset)}
 
-    # Calculate age gap
+    #Calculate age gap
     if '<70' in age_results and '>80' in age_results:
         age_gap = abs(age_results['<70']['acc'] - age_results['>80']['acc']) * 100
     else:
@@ -80,7 +80,7 @@ def evaluate_config(config_name, dropout):
     }
 
 
-# Configs with their dropout values
+#Configs with their dropout values
 configs = [
     ('baseline', 0.3),
     ('lower_lr', 0.3),
@@ -95,10 +95,10 @@ for config_name, dropout in configs:
     result = evaluate_config(config_name, dropout)
     results.append(result)
 
-# Summary
+#Summary
 results_df = pd.DataFrame(results)
 print("\n" + "="*80)
-print("HYPERPARAMETER SEARCH - TEST SET RESULTS")
+print("Hyperparameter test - Test Set Results")
 print("="*80)
 print(results_df.to_string(index=False))
 print("\n")
