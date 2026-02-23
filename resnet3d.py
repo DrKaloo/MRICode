@@ -1,116 +1,139 @@
+from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
-class BasicBlock3D(nn.Module):
 
-    def __init__(self, in_channels, out_channels, stride=1, dropout=0.0):
+@dataclass
+class ModelConfig:
+    backbone: str = "r3d_18"  # r3d_18, r2plus1d_18, custom_small imported
+    pretrained: bool = False
+    in_channels: int = 1
+    out_dim: int = 3
+    dropout: float = 0.2
+
+
+def _set_module_by_name(root: nn.Module, name: str, new_module: nn.Module) -> None:
+    parts = name.split(".")
+    parent = root
+    for p in parts[:-1]:
+        parent = getattr(parent, p)
+    setattr(parent, parts[-1], new_module)
+
+
+def _replace_first_conv3d(model: nn.Module, in_channels: int, pretrained: bool) -> None:
+    first_name = None
+    first_conv = None
+
+    for name, m in model.named_modules():
+        if isinstance(m, nn.Conv3d):
+            first_name = name
+            first_conv = m
+            break
+
+    if first_conv is None or first_name is None:
+        return
+
+    if first_conv.in_channels == in_channels:
+        return
+
+    new_conv = nn.Conv3d(
+        in_channels=in_channels,
+        out_channels=first_conv.out_channels,
+        kernel_size=first_conv.kernel_size,
+        stride=first_conv.stride,
+        padding=first_conv.padding,
+        dilation=first_conv.dilation,
+        groups=first_conv.groups if first_conv.groups == 1 else 1,
+        bias=(first_conv.bias is not None),
+        padding_mode=first_conv.padding_mode,
+    )
+
+    with torch.no_grad():
+        if pretrained and first_conv.weight is not None and first_conv.weight.ndim == 5:
+            w = first_conv.weight  # (out, in, kD, kH, kW)
+            if w.shape[1] == 3 and in_channels == 1:
+                new_conv.weight.copy_(w.mean(dim=1, keepdim=True))
+            elif w.shape[1] == 3 and in_channels > 1:
+                base = w.mean(dim=1, keepdim=True)  # [out,1,...]
+                new_conv.weight.copy_(base.repeat(1, in_channels, 1, 1, 1) / float(in_channels))
+            else:
+                nn.init.kaiming_normal_(new_conv.weight, mode="fan_out", nonlinearity="relu")
+        else:
+            nn.init.kaiming_normal_(new_conv.weight, mode="fan_out", nonlinearity="relu")
+
+        if new_conv.bias is not None:
+            nn.init.zeros_(new_conv.bias)
+
+    _set_module_by_name(model, first_name, new_conv)
+
+
+class CustomSmall3D(nn.Module):
+    def __init__(self, in_channels: int, out_dim: int, dropout: float):
         super().__init__()
 
-        self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm3d(out_channels)
-        self.relu = nn.ReLU(inplace=True)
-        self.dropout = nn.Dropout3d(dropout) if dropout > 0 else None
-
-        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm3d(out_channels)
-
-        self.downsample = None
-        if stride != 1 or in_channels != out_channels:
-            self.downsample = nn.Sequential(
-                nn.Conv3d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm3d(out_channels)
+        def block(cin, cout, k=3, s=1, p=1):
+            return nn.Sequential(
+                nn.Conv3d(cin, cout, kernel_size=k, stride=s, padding=p, bias=False),
+                nn.BatchNorm3d(cout),
+                nn.ReLU(inplace=True),
             )
 
-    def forward(self, x):
-        identity = x
+        self.features = nn.Sequential(
+            block(in_channels, 32, 3, 1, 1),
+            nn.MaxPool3d(kernel_size=2, stride=2),
+            block(32, 64, 3, 1, 1),
+            nn.MaxPool3d(kernel_size=2, stride=2),
+            block(64, 128, 3, 1, 1),
+            nn.MaxPool3d(kernel_size=2, stride=2),
+            block(128, 256, 3, 1, 1),
+        )
 
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
+        self.pool = nn.AdaptiveAvgPool3d((1, 1, 1))
+        self.head = nn.Sequential(
+            nn.Dropout(p=float(dropout)),
+            nn.Linear(256, out_dim),
+        )
 
-        if self.dropout:
-            out = self.dropout(out)
-
-        out = self.conv2(out)
-        out = self.bn2(out)
-
-        if self.downsample is not None:
-            identity = self.downsample(x)
-
-        out += identity
-        out = self.relu(out)
-
-        return out
-
-class ResNet3D(nn.Module):
-
-    def __init__(self, block_config= None, num_classes=2, dropout=0.3):
-        super().__init__()
-
-        if block_config is None:
-            block_config = [2, 2, 2, 2]
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.features(x)
+        x = self.pool(x).flatten(1)
+        return self.head(x)
 
 
-        self.conv1 = nn.Conv3d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.bn1 = nn.BatchNorm3d(64)
-        self.relu = nn.ReLU(inplace=True)
-        #noinspection SpellCheckingInspection
-        self.maxpool = nn.MaxPool3d(kernel_size=3, stride=2, padding=1)
+def build_model(cfg: ModelConfig) -> nn.Module:
+    backbone = str(cfg.backbone).lower().strip()
+    in_ch = int(cfg.in_channels)
+    out_dim = int(cfg.out_dim)
+    dropout = float(cfg.dropout)
 
-        self.layer1 = self._make_layer(64, 64, block_config[0], stride=1, dropout=dropout)
-        self.layer2 = self._make_layer(64, 128, block_config[1], stride=2, dropout=dropout)
-        self.layer3 = self._make_layer(128, 256, block_config[2], stride=2, dropout=dropout)
-        self.layer4 = self._make_layer(256, 512, block_config[3], stride=2, dropout=dropout)
-        # noinspection SpellCheckingInspection
-        self.avgpool = nn.AdaptiveAvgPool3d((1, 1, 1))
-        self.dropout_final = nn.Dropout(0.5)
-        self.fc = nn.Linear(512, num_classes)
+    if backbone == "custom_small":
+        return CustomSmall3D(in_channels=in_ch, out_dim=out_dim, dropout=dropout)
 
-        self._initialize_weights()
-    #noinspection PyMethodMayBeStatic
-    def _make_layer(self, in_channels, out_channels, blocks, stride, dropout):
-        layers = [BasicBlock3D(in_channels, out_channels, stride, dropout)]
+    # torchvision video backbones
+    try:
+        from torchvision.models.video import r3d_18, r2plus1d_18
+        from torchvision.models.video import R3D_18_Weights, R2Plus1D_18_Weights
+    except Exception as e:
+        raise RuntimeError(
+            "torchvision video models not available. Install torchvision according to graphics version"
+        ) from e            # took me a substantial amount of time to download and get to use GPU
 
-        for _ in range(1, blocks):
-            layers.append(BasicBlock3D(out_channels, out_channels, stride=1, dropout=dropout))
+    # Imported Backbones
+    if backbone == "r3d_18":
+        weights = R3D_18_Weights.KINETICS400_V1 if cfg.pretrained else None
+        model = r3d_18(weights=weights)
+    elif backbone == "r2plus1d_18":
+        weights = R2Plus1D_18_Weights.KINETICS400_V1 if cfg.pretrained else None
+        model = r2plus1d_18(weights=weights)
+    else:
+        raise ValueError(f"Unknown backbone: {cfg.backbone}")
 
-        return nn.Sequential(*layers)
-    #noinspection DuplicatedCode
-    def _initialize_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv3d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-            elif isinstance(m, nn.BatchNorm3d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
-                nn.init.constant_(m.bias, 0)
+    _replace_first_conv3d(model, in_channels=in_ch, pretrained=bool(cfg.pretrained))
 
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
-
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-
-        x = self.avgpool(x)
-        x = torch.flatten(x, 1)
-        x = self.dropout_final(x)
-        x = self.fc(x)
-
-        return x
-
-def resnet3d_18(num_classes=2, block_config=None, dropout=0.3):
-    if block_config is None:
-        block_config = [2, 2, 2, 2]
-    return ResNet3D(block_config=block_config, num_classes=num_classes, dropout=dropout)
-
-def resnet3d_34(num_classes=2, block_config=None, dropout=0.3):
-    if block_config is None:
-        block_config = [3, 4, 6, 3]
-    return ResNet3D(block_config=block_config, num_classes=num_classes, dropout=dropout)
+    # Replace classifier head to out_dim
+    in_features = model.fc.in_features
+    model.fc = nn.Sequential(
+        nn.Dropout(p=dropout),
+        nn.Linear(in_features, out_dim),
+    )
+    return model

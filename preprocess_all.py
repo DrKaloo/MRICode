@@ -1,112 +1,167 @@
 import os
+import re
+import argparse
+from glob import glob
+
 import numpy as np
 import nibabel as nib
 import pandas as pd
 from scipy.ndimage import zoom, binary_erosion, binary_dilation, binary_fill_holes
-from glob import glob
 from tqdm import tqdm
-from sklearn.model_selection import train_test_split
 
-BASE_FOLDER = r"C:\Users\todor\PycharmProjects\PyCharm-Work\Msc-AD\data\raw"
-OUTPUT_BASE = r"C:\Users\todor\PycharmProjects\PyCharm-Work\Msc-AD\data"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-#demographics
-#noinspection PyTypeChecker
+BASE_FOLDER = os.path.join(BASE_DIR, "data", "raw")
+OUTPUT_BASE = os.path.join(BASE_DIR, "data")
+
+# OAS2 demographics CSV:
+# Msc-AD/data/oasis_longitudinal_demographics.csv (LOCAL)
+OAS2_DEMOGRAPHICS_PATH = os.path.join(OUTPUT_BASE, "oasis_longitudinal_demographics.csv")
+
 AGE_MIN = None
 AGE_MAX = None
-SEX_FILTER = None  #'M', 'F', or None
+SEX_FILTER = None  # 'M', 'F', or None
 EDUC_MIN = None
 
+RESOLUTIONS = [96, 128]
 
-def preprocess_scan_proper(input_path, output_path, target_shape):
+# DEFAULT BEHAVIOUR:
+# wipes processed_{res} outputs
+# re-preprocess all scans
+# regenerates metadata.csv
+DEFAULT_WIPE = True
+DEFAULT_PREPROCESS = True
 
+
+
+# Atomic save
+
+def atomic_nifti_save(img: nib.Nifti1Image, out_path: str) -> None:
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+    if out_path.endswith(".nii.gz"):
+        tmp_path = out_path[:-7] + ".tmp.nii.gz"
+    elif out_path.endswith(".nii"):
+        tmp_path = out_path[:-4] + ".tmp.nii"
+    else:
+        tmp_path = out_path + ".tmp.nii.gz"
+
+    if os.path.exists(tmp_path):
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+    nib.save(img, tmp_path)
+
+    if (not os.path.exists(tmp_path)) or os.path.getsize(tmp_path) == 0:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+        raise RuntimeError(f"Atomic save failed (empty tmp): {tmp_path}")
+
+    _ = nib.load(tmp_path)
+    os.replace(tmp_path, out_path)
+
+    if os.path.getsize(out_path) == 0:
+        raise RuntimeError(f"Atomic save failed (empty out): {out_path}")
+
+
+
+# Preprocess one scan
+
+def preprocess_scan_proper(input_path: str, output_path: str, target_shape: tuple[int, int, int]):
     img = nib.load(input_path)
-    data = img.get_fdata() # type: ignore
-    original_affine = img.affine # type: ignore
-    #(line above) keeping original spatial information/geometry - preserving spatial information
+    data = img.get_fdata(dtype=np.float32)
+    original_affine = img.affine
 
     if data.ndim == 4:
-        data = data.squeeze()
+        data = np.squeeze(data)
+    if data.ndim != 3:
+        return None
 
-    #Better brain mask using percentile-based threshold
-    threshold = np.percentile(data[data > 0], 10)
+    pos = data[data > 0]
+    if pos.size < 100:
+        return None
+
+    threshold = np.percentile(pos, 10)
     brain_mask = data > threshold
 
-    #Morphological cleanup
     brain_mask = binary_fill_holes(brain_mask)
     brain_mask = binary_erosion(brain_mask, iterations=1)
     brain_mask = binary_dilation(brain_mask, iterations=2)
 
-    #Intensity normalisation
-    brain_voxels = data[brain_mask]
-    if len(brain_voxels) < 100:
+    if not np.any(brain_mask):
         return None
 
-    #Use percentile normalisation (more robust than mean/std)
+    brain_voxels = data[brain_mask]
+    if brain_voxels.size < 100:
+        return None
+
     p01, p99 = np.percentile(brain_voxels, [1, 99])
     data_clipped = np.clip(data, p01, p99)
 
-#noinspection DuplicatedCode
-    #Z-score normalisation
-    mean_val = brain_voxels.mean()
-    std_val = brain_voxels.std()
-    data_normalized = (data_clipped - mean_val) / (std_val + 1e-8)
-    data_normalized[~brain_mask] = 0
+    brain_voxels_clipped = data_clipped[brain_mask]
+    mean_val = float(brain_voxels_clipped.mean())
+    std_val = float(brain_voxels_clipped.std())
 
-    #Crop image to brain
-    # noinspection DuplicatedCode
+    data_norm = (data_clipped - mean_val) / (std_val + 1e-8)
+    data_norm[~brain_mask] = 0.0
+
     coords = np.array(np.where(brain_mask))
+    if coords.size == 0:
+        return None
+
     x_min, y_min, z_min = coords.min(axis=1)
     x_max, y_max, z_max = coords.max(axis=1)
 
     pad = 5
-    x_min = max(0, x_min - pad)
-    x_max = min(data.shape[0], x_max + pad + 1)  # +1 to include endpoint
-    y_min = max(0, y_min - pad)
-    y_max = min(data.shape[1], y_max + pad + 1)
-    z_min = max(0, z_min - pad)
-    z_max = min(data.shape[2], z_max + pad + 1)
+    x_min = max(0, int(x_min - pad))
+    y_min = max(0, int(y_min - pad))
+    z_min = max(0, int(z_min - pad))
+    x_max = min(data.shape[0], int(x_max + pad + 1))
+    y_max = min(data.shape[1], int(y_max + pad + 1))
+    z_max = min(data.shape[2], int(z_max + pad + 1))
 
-    data_cropped = data_normalized[x_min:x_max, y_min:y_max, z_min:z_max]
+    cropped = data_norm[x_min:x_max, y_min:y_max, z_min:z_max]
+    if min(cropped.shape) < 4:
+        return None
 
-    #High quality resampling
-    zoom_factors = [target_shape[i] / data_cropped.shape[i] for i in range(3)]
-    data_resized = zoom(data_cropped, zoom_factors, order=3)  #Cubic interpolation
+    zoom_factors = [target_shape[i] / cropped.shape[i] for i in range(3)]
+    resized = zoom(cropped, zoom_factors, order=3).astype(np.float32, copy=False)
 
-    #Create proper affine for resised image
-    #Adjust affine to account for cropping and resampling
-    crop_translation = np.array([x_min, y_min, z_min])
+    crop_translation = np.array([x_min, y_min, z_min], dtype=float)
     new_affine = original_affine.copy()
     new_affine[:3, 3] += original_affine[:3, :3] @ crop_translation
 
-    #Adjust for resampling
-    zoom_matrix = np.diag([1/zoom_factors[0], 1/zoom_factors[1], 1/zoom_factors[2], 1])
+    zoom_matrix = np.diag([1 / zoom_factors[0], 1 / zoom_factors[1], 1 / zoom_factors[2], 1.0])
     new_affine = new_affine @ zoom_matrix
 
-    #Save with proper affine
-    output_img = nib.Nifti1Image(data_resized, affine=new_affine)
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    nib.save(output_img, output_path)
-
+    out_img = nib.Nifti1Image(resized, affine=new_affine)
+    atomic_nifti_save(out_img, output_path)
     return target_shape
 
 
-def find_processed_scans():
-    patient_folders = glob(os.path.join(BASE_FOLDER, "OAS1_*_MR*"))
-    scan_files = []
 
-    for patient_folder in patient_folders:
-        #better quality first once processed
-        #noinspection SpellCheckingInspection
-        processed_folder = os.path.join(patient_folder, "PROCESSED", "MPRAGE", "T88_111")
+# Discover scans (OAS1 + OAS2)
+
+def _discover_oas1_scans(base_folder: str) -> list[str]:
+    session_folders = glob(os.path.join(base_folder, "OAS1_*_MR*"))
+    scan_files: list[str] = []
+
+    for session_folder in session_folders:
+        processed_folder = os.path.join(session_folder, "PROCESSED", "MPRAGE", "T88_111")
         if os.path.exists(processed_folder):
-            scans = glob(os.path.join(processed_folder, "*.hdr"))
+            scans = glob(os.path.join(processed_folder, "*_masked_gfc.hdr"))
+            if not scans:
+                scans = glob(os.path.join(processed_folder, "*_gfc.hdr"))
             if scans:
                 scan_files.extend(scans)
                 continue
 
-        #Raw 1st if None In Processed Path
-        raw_folder = os.path.join(patient_folder, "RAW")
+        raw_folder = os.path.join(session_folder, "RAW")
         if os.path.exists(raw_folder):
             scans = glob(os.path.join(raw_folder, "*_anon.hdr"))
             scan_files.extend(scans)
@@ -114,244 +169,458 @@ def find_processed_scans():
     return scan_files
 
 
-def process_all_resolutions():
-    scan_files = find_processed_scans()
+def _discover_oas2_scans(base_folder: str) -> list[str]:
+    session_folders = glob(os.path.join(base_folder, "**", "OAS2_*_MR*"), recursive=True)
+    scan_files: list[str] = []
 
-    print(f"Found {len(scan_files)} scans\n")
+    for session_folder in session_folders:
+        raw_folder = os.path.join(session_folder, "RAW")
+        if not os.path.exists(raw_folder):
+            continue
 
-    for res in [96, 128]:
-        print(f"Processing {res}³...")
-        output_folder = os.path.join(OUTPUT_BASE, f"processed_{res}")
+        scans = glob(os.path.join(raw_folder, "mpr-*.nifti.hdr"))
+        if not scans:
+            scans = glob(os.path.join(raw_folder, "*.hdr"))
+
+        scan_files.extend(scans)
+
+    return scan_files
+
+
+def find_oasis_scans() -> list[str]:
+    scan_files = []
+    scan_files.extend(_discover_oas1_scans(BASE_FOLDER))
+    scan_files.extend(_discover_oas2_scans(BASE_FOLDER))
+
+    seen = set()
+    out = []
+    for p in scan_files:
+        n = os.path.normpath(p)
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+
+# Output management
+
+def wipe_output_folders():
+    for res in RESOLUTIONS:
+        folder = os.path.join(OUTPUT_BASE, f"processed_{res}")
+        if not os.path.exists(folder):
+            continue
+
+        for f in glob(os.path.join(folder, "*.nii.gz")):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
+        for f in glob(os.path.join(folder, "*.tmp.nii*")):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
+
+def _session_id_from_path(scan_path: str) -> str | None:
+    parts = scan_path.split(os.sep)
+    for part in parts:
+        if part.startswith("OAS1_") and "_MR" in part:
+            return part
+        if part.startswith("OAS2_") and "_MR" in part:
+            return part
+    return None
+
+
+def _subject_id_from_session(session_id: str) -> str:
+    m = re.search(r"((?:OAS1|OAS2)_\d{4})", str(session_id), re.IGNORECASE)
+    return m.group(1) if m else str(session_id)
+
+
+def process_all_resolutions(force: bool = True):
+    scan_files = find_oasis_scans()
+    n_oas1 = sum(1 for p in scan_files if "OAS1_" in p)
+    n_oas2 = sum(1 for p in scan_files if "OAS2_" in p)
+    print(f"Found {len(scan_files)} scans (OAS1+OAS2)")
+    print(f"[DEBUG] scan breakdown: OAS1={n_oas1} OAS2={n_oas2}")
+
+    for res in RESOLUTIONS:
+        out_folder = os.path.join(OUTPUT_BASE, f"processed_{res}")
+        os.makedirs(out_folder, exist_ok=True)
 
         success = 0
-        for scan_path in tqdm(scan_files, desc=f"Resolution {res}³"):
-            parts = scan_path.split(os.sep)
+        fail = 0
 
-            #Extract patient ID
-            patient_id = None
-            for part in parts:
-                if part.startswith('OAS1_'):
-                    patient_id = part
-                    break
+        for scan_path in tqdm(scan_files, desc=f"Processing {res}^3"):
+            session_id = _session_id_from_path(scan_path)
+            if session_id is None:
+                continue
 
-            if patient_id:
-                filename = os.path.basename(scan_path).replace('.hdr', '')
-                output_path = os.path.join(output_folder, f"{patient_id}_{filename}.nii.gz")
+            filename = os.path.basename(scan_path).replace(".hdr", "")
+            output_path = os.path.join(out_folder, f"{session_id}_{filename}.nii.gz")
 
+            if output_path.endswith(".nii.gz"):
+                tmp_path = output_path[:-7] + ".tmp.nii.gz"
+            else:
+                tmp_path = output_path + ".tmp.nii.gz"
+
+            if os.path.exists(tmp_path):
                 try:
-                    result = preprocess_scan_proper(scan_path, output_path, (res, res, res))
-                    if result:
-                        success += 1
-                except (IOError, ValueError, RuntimeError) as e:
-                    print(f"\nError on {patient_id}: {e}")
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
-        print(f"Completed {res}³: {success}/{len(scan_files)} successful")
+            if os.path.exists(output_path) and os.path.getsize(output_path) == 0:
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass
+
+            # If not forcing, ignore existing outputs
+            if (not force) and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                continue
+
+            # Delete existing output to re- run
+            if force and os.path.exists(output_path):
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass
+
+            try:
+                ok = preprocess_scan_proper(scan_path, output_path, (res, res, res))
+                if ok is not None:
+                    success += 1
+                else:
+                    fail += 1
+            except Exception as e:
+                fail += 1
+                try:
+                    if os.path.exists(output_path) and os.path.getsize(output_path) == 0:
+                        os.remove(output_path)
+                except OSError:
+                    pass
+                try:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                except OSError:
+                    pass
+                print(f"\nFail {session_id} ({res}): {type(e).__name__}: {e}")
+
+        print(f"Completed {res}^3: success={success} fail={fail}")
+
+
+
+# Demographics / labels
+
+def _cdr_to_label(cdr: float) -> tuple[str, int] | None:
+    if cdr == 0:
+        return "CN", 0
+    if cdr == 0.5:
+        return "VeryMild", 1
+    if cdr >= 1.0:
+        return "Dementia", 2
+    return None
+
+
+def _load_oas2_table() -> pd.DataFrame | None:
+    if os.path.exists(OAS2_DEMOGRAPHICS_PATH):
+        f = OAS2_DEMOGRAPHICS_PATH
+        print(f"[OAS2] demographics file: {f}")
+    else:
+        patterns = [
+            os.path.join(OUTPUT_BASE, "**", "*demographic*.csv"),
+            os.path.join(OUTPUT_BASE, "**", "*longitudinal*.csv"),
+            os.path.join(BASE_FOLDER, "**", "*demographic*.csv"),
+            os.path.join(BASE_FOLDER, "**", "*longitudinal*.csv"),
+        ]
+        cands = []
+        for pat in patterns:
+            cands.extend(glob(pat, recursive=True))
+        cands = [c for c in cands if os.path.isfile(c)]
+        cands.sort(key=lambda p: (len(p), p.lower()))
+        f = cands[0] if cands else None
+        print(f"[OAS2] demographics candidate: {f}")
+
+    if not f:
+        return None
+
+    ext = os.path.splitext(f)[1].lower()
+    if ext != ".csv":
+        raise RuntimeError(f"OAS2 demographics must be CSV. Found: {f}")
+
+    read_errors = []
+    df = None
+    for enc in ["utf-8", "utf-8-sig", "latin1"]:
+        try:
+            df = pd.read_csv(f, sep=None, engine="python", encoding=enc)
+            break
+        except Exception as e:
+            read_errors.append(f"{enc}:{type(e).__name__}")
+            df = None
+    if df is None:
+        raise RuntimeError(f"Failed to read OAS2 .csv ({f}). Attempts: {read_errors}")
+
+    df = df.copy()
+    df.columns = [str(c).strip().lower().replace(" ", "_").replace("-", "_") for c in df.columns]
+
+    def pick(*names):
+        for n in names:
+            if n in df.columns:
+                return n
+        return None
+
+    c_session = pick("mri_id", "mriid", "mri", "scan_id", "scanid", "session_id", "sessionid", "image_id", "imageid")
+    c_subj = pick("subject_id", "subjectid", "subject", "id", "participant_id")
+    c_cdr = pick("cdr", "cdr_global", "cdr_total", "cdr_score")
+    c_age = pick("age", "age_at_visit", "age_at_scan", "age_at_mri")
+    c_sex = pick("sex", "gender", "m_f", "m/f")
+    c_educ = pick("educ", "education", "years_education", "education_years")
+    c_mmse = pick("mmse", "mini_mental_state_exam", "minimental")
+
+    if c_session is None:
+        print(f"Warning: OAS2 table missing a session/MRI column. Columns={df.columns.tolist()}")
+        return None
+
+    out = pd.DataFrame()
+    out["session_id"] = df[c_session].astype(str).str.strip()
+
+    if c_subj is not None:
+        out["subject_id"] = df[c_subj].astype(str).str.strip()
+    else:
+        out["subject_id"] = out["session_id"].str.extract(r"(OAS2_\d{4})", expand=False)
+
+    out["cdr"] = pd.to_numeric(df[c_cdr], errors="coerce") if c_cdr else np.nan
+    out["age"] = pd.to_numeric(df[c_age], errors="coerce") if c_age else np.nan
+    out["sex"] = df[c_sex].astype(str).str.strip() if c_sex else ""
+    out["educ"] = pd.to_numeric(df[c_educ], errors="coerce") if c_educ else np.nan
+    out["mmse"] = pd.to_numeric(df[c_mmse], errors="coerce") if c_mmse else np.nan
+
+    out["sex"] = (
+        out["sex"]
+        .replace({"male": "M", "female": "F", "m": "M", "f": "F", "1": "M", "0": "F"})
+        .astype(str)
+        .str.upper()
+        .str.strip()
+    )
+    out.loc[~out["sex"].isin(["M", "F"]), "sex"] = ""
+
+    out = out[out["session_id"].str.contains(r"^OAS2_\d{4}_MR\d+", case=False, regex=True)].copy()
+
+    out["_cdr_ok"] = out["cdr"].notna().astype(int)
+    out = (
+        out.sort_values(["session_id", "_cdr_ok"], ascending=[True, False])
+           .drop_duplicates(subset=["session_id"], keep="first")
+           .drop(columns=["_cdr_ok"])
+    )
+
+    print(f"[OAS2] table rows usable: {len(out)} (unique sessions)")
+    return out
 
 
 def extract_labels_with_demographics():
-    """
-    Extract labels and demographics, apply filters
-    """
-    patient_pattern = os.path.join(BASE_FOLDER, "OAS1_*_MR*")
-    patient_folders = glob(patient_pattern)
-    metadata = []
+    rows = []
 
-    skipped_age = 0
-    skipped_sex = 0
-    skipped_cdr = 0
+    # OAS1: per-session txt files
+    oas1_sessions = glob(os.path.join(BASE_FOLDER, "OAS1_*_MR*"))
+    skipped_oas1_no_cdr = 0
 
-    for patient_folder in patient_folders:
-        patient_id = os.path.basename(patient_folder)
-        txt_file = os.path.join(patient_folder, f"{patient_id}.txt")
+    for session_folder in oas1_sessions:
+        session_id = os.path.basename(session_folder)
+        subject_id = _subject_id_from_session(session_id)
 
+        txt_file = os.path.join(session_folder, f"{session_id}.txt")
         if not os.path.exists(txt_file):
             continue
 
-        with open(txt_file, 'r', encoding='utf-8') as f:
+        with open(txt_file, "r", encoding="utf-8") as f:
             content = f.read()
 
-        #metadata
-        #noinspection SpellCheckingInspection
-        cdr = age = sex = educ = mmse = None
+        cdr = age = educ = mmse = None
+        sex = None
 
-        for line in content.split('\n'):
+        for line in content.splitlines():
             line = line.strip()
-            if 'CDR:' in line:
+            if "CDR:" in line:
                 try:
-                    cdr = float(line.split('CDR:')[1].strip())
-                except (ValueError, IndexError):
+                    cdr = float(line.split("CDR:")[1].strip())
+                except Exception:
                     pass
-            elif 'AGE:' in line:
+            elif "AGE:" in line:
                 try:
-                    age = int(line.split('AGE:')[1].strip())
-                except (ValueError, IndexError):
+                    age = int(line.split("AGE:")[1].strip())
+                except Exception:
                     pass
-            elif 'M/F:' in line:
+            elif "M/F:" in line:
                 try:
-                    sex = line.split('M/F:')[1].strip()
-                except (ValueError, IndexError):
+                    sex = line.split("M/F:")[1].strip()
+                except Exception:
                     pass
-            elif 'EDUC:' in line:
+            elif "EDUC:" in line:
                 try:
-                    educ = int(line.split('EDUC:')[1].strip())
-                except (ValueError, IndexError):
+                    educ = int(line.split("EDUC:")[1].strip())
+                except Exception:
                     pass
-            #noinspection SpellCheckingInspection
-            elif 'MMSE:' in line:
+            elif "MMSE:" in line:
                 try:
-                    # noinspection SpellCheckingInspection
-                    mmse = int(line.split('MMSE:')[1].strip())
-                except (ValueError, IndexError):
+                    mmse = int(line.split("MMSE:")[1].strip())
+                except Exception:
                     pass
 
-        #demographic filters
         if cdr is None:
-            skipped_cdr += 1
+            skipped_oas1_no_cdr += 1
             continue
 
-        if AGE_MIN is not None and (age is None or age < AGE_MIN): # type: ignore
-            skipped_age += 1
+        if AGE_MIN is not None and (age is None or age < AGE_MIN):
             continue
-
-        if AGE_MAX is not None and (age is None or age > AGE_MAX): # type: ignore
-            skipped_age += 1
+        if AGE_MAX is not None and (age is None or age > AGE_MAX):
             continue
-
         if SEX_FILTER is not None and sex != SEX_FILTER:
-            skipped_sex += 1
+            continue
+        if EDUC_MIN is not None and (educ is None or educ < EDUC_MIN):
             continue
 
-        if EDUC_MIN is not None and (educ is None or educ < EDUC_MIN): # type: ignore
+        diag = _cdr_to_label(cdr)
+        if diag is None:
             continue
+        diagnosis, label = diag
 
-        #labeling
-        if cdr == 0:
-            diagnosis = 'CN'  # Cognitively Normal
-            label = 0
-        elif cdr == 0.5:
-            diagnosis = 'VeryMild'  # Very Mild Impairment (CDR 0.5)
-            label = 1
-        elif cdr >= 1.0:
-            diagnosis = 'Dementia'  # Mild+ Dementia (CDR ≥1)
-            label = 2
-        else:
-            continue
-
-        #Find processed scans
-        for res in [96, 128]:
-            processed_folder = os.path.join(OUTPUT_BASE, f"processed_{res}")
-            scan_pattern = os.path.join(processed_folder, f"{patient_id}_*.nii.gz")
-            processed_scans = glob(scan_pattern)
-
-            for scan_path in processed_scans:
-                metadata.append({
-                    'patient_id': patient_id,
-                    'resolution': res,
-                    'scan_filename': os.path.basename(scan_path),
-                    'scan_path': scan_path,
-                    'cdr': cdr,
-                    'age': age,
-                    'sex': sex,
-                    'educ': educ,
-                    'mmse': mmse,
-                    'diagnosis': diagnosis,
-                    'label': label
+        for res in RESOLUTIONS:
+            proc_folder = os.path.join(OUTPUT_BASE, f"processed_{res}")
+            pattern = os.path.join(proc_folder, f"{session_id}_*.nii.gz")
+            for scan_path in glob(pattern):
+                if (not os.path.exists(scan_path)) or os.path.getsize(scan_path) == 0:
+                    continue
+                rows.append({
+                    "dataset": "OAS1",
+                    "subject_id": subject_id,
+                    "session_id": session_id,
+                    "resolution": res,
+                    "scan_filename": os.path.basename(scan_path),
+                    "scan_path": scan_path,
+                    "cdr": cdr,
+                    "age": age,
+                    "sex": sex,
+                    "educ": educ,
+                    "mmse": mmse,
+                    "diagnosis": diagnosis,
+                    "label": label,
                 })
 
-    df = pd.DataFrame(metadata)
-    df.to_csv(os.path.join(OUTPUT_BASE, 'metadata.csv'), index=False)
+    # OAS2: demographics table matched by session_id
+    oas2_table = _load_oas2_table()
+    oas2_sessions = glob(os.path.join(BASE_FOLDER, "**", "OAS2_*_MR*"), recursive=True)
 
-    print(f"\n Saved {len(df)} scan entries")
-    print(f"Unique patients: {df['patient_id'].nunique()}")
-    print(f"\nFilters applied:")
-    print(f"Age range: {AGE_MIN or 'None'} - {AGE_MAX or 'None'}")
-    print(f"Sex: {SEX_FILTER or 'Both'}")
-    print(f"Skipped: {skipped_age} (age), {skipped_sex} (sex), {skipped_cdr} (no CDR)")
+    if oas2_table is None or len(oas2_table) == 0:
+        print("Warning: No usable OAS2 demographics table found. OAS2 preprocessed but not added to metadata.csv.")
+    else:
+        t = oas2_table.copy()
+        t["session_id"] = t["session_id"].astype(str).str.strip()
+        t_idx = {sid: row for sid, row in t.set_index("session_id").iterrows()}
 
-    print(f"\nClass distribution (patients):")
-    print(df.groupby('diagnosis')['patient_id'].nunique())
-    print(f"\nAge statistics:")
-    print(df.groupby('diagnosis')['age'].describe())
-    print(f"\nSex distribution:")
-    print(pd.crosstab(df['diagnosis'], df['sex']))
+        skipped_oas2_no_match = 0
+        skipped_oas2_no_cdr = 0
+        added_oas2 = 0
 
-#noinspection DuplicatedCode
-def create_binary_split(df_binary, splits_base, res):
-    """Helper to create binary classification splits"""
-    try:
-        train_b, temp_b = train_test_split(df_binary, test_size=0.4, random_state=42,
-                                          stratify=df_binary['binary_label'])
-        val_b, test_b = train_test_split(temp_b, test_size=0.5, random_state=42,
-                                        stratify=temp_b['binary_label'])
+        for session_folder in oas2_sessions:
+            session_id = os.path.basename(session_folder)
+            subject_id = _subject_id_from_session(session_id)
 
-        split_dir = os.path.join(splits_base, f'res_{res}_binary')
-        os.makedirs(split_dir, exist_ok=True)
-        train_b.to_csv(os.path.join(split_dir, 'train.csv'), index=False)
-        val_b.to_csv(os.path.join(split_dir, 'val.csv'), index=False)
-        test_b.to_csv(os.path.join(split_dir, 'test.csv'), index=False)
+            r = t_idx.get(session_id)
+            if r is None:
+                skipped_oas2_no_match += 1
+                continue
 
-        print(f"\nBinary (CN vs VeryMild):")
-        print(f"Train: {len(train_b)}, Val: {len(val_b)}, Test: {len(test_b)}")
-    except ValueError as e:
-        print(f"Binary split failed: {e}")
+            cdr = float(r["cdr"]) if pd.notna(r.get("cdr", np.nan)) else None
+            if cdr is None:
+                skipped_oas2_no_cdr += 1
+                continue
 
-#noinspection DuplicatedCode
-def create_3class_split(df_res, splits_base, res):
-    """Helper to create 3-class splits"""
-    try:
-        train_3, temp_3 = train_test_split(df_res, test_size=0.4, random_state=42,
-                                          stratify=df_res['label'])
-        val_3, test_3 = train_test_split(temp_3, test_size=0.5, random_state=42,
-                                        stratify=temp_3['label'])
+            age = None if pd.isna(r.get("age", np.nan)) else float(r["age"])
+            sex = str(r.get("sex", "")).strip() if isinstance(r.get("sex", ""), str) else ""
+            sex = sex if sex in ["M", "F"] else None
+            educ = None if pd.isna(r.get("educ", np.nan)) else int(r["educ"])
+            mmse = None if pd.isna(r.get("mmse", np.nan)) else int(r["mmse"])
 
-        split_dir = os.path.join(splits_base, f'res_{res}_3class')
-        os.makedirs(split_dir, exist_ok=True)
-        train_3.to_csv(os.path.join(split_dir, 'train.csv'), index=False)
-        val_3.to_csv(os.path.join(split_dir, 'val.csv'), index=False)
-        test_3.to_csv(os.path.join(split_dir, 'test.csv'), index=False)
+            if AGE_MIN is not None and (age is None or age < AGE_MIN):
+                continue
+            if AGE_MAX is not None and (age is None or age > AGE_MAX):
+                continue
+            if SEX_FILTER is not None and sex != SEX_FILTER:
+                continue
+            if EDUC_MIN is not None and (educ is None or educ < EDUC_MIN):
+                continue
 
-        print(f"\n  3-Class (CN vs VeryMild vs Dementia):")
-        print(f"    Train: {len(train_3)}, Val: {len(val_3)}, Test: {len(test_3)}")
-    except ValueError as e:
-        print(f"  3-class split failed: {e}")
+            diag = _cdr_to_label(cdr)
+            if diag is None:
+                continue
+            diagnosis, label = diag
+
+            for res in RESOLUTIONS:
+                proc_folder = os.path.join(OUTPUT_BASE, f"processed_{res}")
+                pattern = os.path.join(proc_folder, f"{session_id}_*.nii.gz")
+                for scan_path in glob(pattern):
+                    if (not os.path.exists(scan_path)) or os.path.getsize(scan_path) == 0:
+                        continue
+                    rows.append({
+                        "dataset": "OAS2",
+                        "subject_id": subject_id,
+                        "session_id": session_id,
+                        "resolution": res,
+                        "scan_filename": os.path.basename(scan_path),
+                        "scan_path": scan_path,
+                        "cdr": cdr,
+                        "age": age,
+                        "sex": sex,
+                        "educ": educ,
+                        "mmse": mmse,
+                        "diagnosis": diagnosis,
+                        "label": label,
+                    })
+                    added_oas2 += 1
+
+        print(f"[OAS2] added_rows={added_oas2} skipped_no_match={skipped_oas2_no_match} skipped_no_cdr={skipped_oas2_no_cdr}")
+
+    df = pd.DataFrame(rows)
+    out_csv = os.path.join(OUTPUT_BASE, "metadata.csv")
+    df.to_csv(out_csv, index=False)
+
+    print(f"Wrote: {out_csv}")
+    if len(df):
+        print(f"Scan entries: {len(df)} | Unique subjects: {df['subject_id'].nunique()}")
+        print(df["dataset"].value_counts().to_string())
+    print(f"[OAS1] skipped_no_cdr={skipped_oas1_no_cdr}")
 
 
-def create_splits():
-    df = pd.read_csv(os.path.join(OUTPUT_BASE, 'metadata.csv'))
-    splits_base = os.path.join(OUTPUT_BASE, 'splits')
-
-    for res in [96, 128]:
-        df_res = df[df['resolution'] == res]
-
-        #Keep 1 scan per patient
-        df_res = df_res.sort_values('scan_filename').groupby('patient_id').first().reset_index()
-
-        print(f"\nResolution {res}³:")
-        print(f"  Total patients: {len(df_res)}")
-        print(f"  Class balance: {df_res['diagnosis'].value_counts().to_dict()}")
-
-        #Binary split: CN vs VeryMild (for early detection)
-        df_binary = df_res[df_res['label'].isin([0, 1])].copy()
-        df_binary['binary_label'] = df_binary['label']  # 0=CN, 1=VeryMild
-        create_binary_split(df_binary, splits_base, res)
-
-        #3-class split: CN vs VeryMild vs Dementia
-        create_3class_split(df_res, splits_base, res)
+def build_argparser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--no_wipe", action="store_true", help=             "Do not delete existing processed_*/ volumes first")
+    ap.add_argument("--skip_preprocess", action="store_true", help=     "Skip volume preprocessing; only write metadata.csv")
+    ap.add_argument("--no_force", action="store_true", help=            "If preprocessing, do not overwrite existing outputs")
+    return ap
 
 
-if __name__ == '__main__':
-    print("="*60)
-    print("Right Preprocessing - Using OASIS Processed Data")
-    print("="*60)
-    print(f"Demographics filters:")
-    print(f"  Age: {AGE_MIN or 'None'} - {AGE_MAX or 'None'}")
-    print(f"  Sex: {SEX_FILTER or 'Both'}")
-    print("="*60)
+if __name__ == "__main__":
+    args = build_argparser().parse_args()
 
-    process_all_resolutions()
+    print("OASIS Preprocessing (OAS1 + OAS2; atomic saves)")
+
+    do_wipe = DEFAULT_WIPE and (not args.no_wipe)
+    do_preprocess = DEFAULT_PREPROCESS and (not args.skip_preprocess)
+    force = not args.no_force
+
+    if do_preprocess:
+        if do_wipe:
+            print("[Run] wipe_output_folders()")
+            wipe_output_folders()
+        print(f"[Run] process_all_resolutions(force={force})")
+        process_all_resolutions(force=force)
+    else:
+        print("[Skip] process_all_resolutions()")
+
+    print("[Run] extract_labels_with_demographics()")
     extract_labels_with_demographics()
-    create_splits()
 
-    print("\n" + "="*60)
-    print("Ready for training")
-    print("="*60)
+    print("PreProcessing Done. To Do Next: Regenerate splits from metadata, using Data_splits.py then proceed to train/evaluate")
